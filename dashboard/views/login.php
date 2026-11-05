@@ -366,6 +366,37 @@
                 font-size: 22px;
             }
         }
+        
+        /* ===== FLOATING ACTION BUTTON (FAB) WBS ===== */
+        .wbs-fab-btn {
+            position: fixed;
+            bottom: 28px;
+            right: 28px;
+            height: 52px;
+            padding: 0 20px;
+            background: linear-gradient(135deg, #1a2755 0%, #2b3b75 100%);
+            color: #ffffff;
+            border: none;
+            border-radius: 50px;
+            box-shadow: 0 6px 20px rgba(26, 39, 85, 0.35);
+            cursor: pointer;
+            z-index: 999;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 600;
+            font-size: 14px;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .wbs-fab-btn:hover {
+            transform: translateY(-3px) scale(1.03);
+            box-shadow: 0 10px 25px rgba(26, 39, 85, 0.45);
+        }
+
+        .wbs-fab-btn i {
+            font-size: 18px;
+        }
     </style>
 </head>
 <body>
@@ -521,6 +552,21 @@
     </div>
 
 </div>
+
+<!-- ============================== -->
+<!-- WBS FLOATING BUTTON (Membuka di Tab Baru) -->
+<!-- ============================== -->
+<button type="button" class="wbs-fab-btn" onclick="openWbsTab()" title="Buka Whistleblowing System">
+    <i class="fa-solid fa-bullhorn"></i>
+    <span class="wbs-fab-label">Whistleblowing</span>
+</button>
+
+<script>
+    function openWbsTab() {
+        // Membuka halaman kepo di tab baru secara bersih untuk menghindari blokir iframe (refused to connect)
+        window.open('https://kepo.lju.co.id', '_blank');
+    }
+</script>
 
 </body>
 </html>
