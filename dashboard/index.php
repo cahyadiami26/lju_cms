@@ -9,6 +9,7 @@ require_once __DIR__ . '/config/session.php';
 require_once __DIR__ . '/config/database.php';
 require_once __DIR__ . '/config/apps.php';
 require_once __DIR__ . '/config/google.php';
+require_once __DIR__ . '/config/activity_log.php';
 
 $pdo = getDBConnection();
 $error = '';
@@ -39,6 +40,12 @@ $has_valid_target = !empty($target_system) && in_array($target_system, $allowed_
 if (isLoggedIn()) {
     // Jika ada target_system valid, langsung redirect ke aplikasi tersebut
     if ($has_valid_target) {
+        // Catat aktivitas klik aplikasi (SSO langsung ke aplikasi tujuan)
+        $targetApp = getAppByUrl($target_system);
+        if ($targetApp !== null) {
+            logAppOpen((string) $targetApp['key'], $targetApp, (int) ($_SESSION['user_id'] ?? 0), 'SSO dari portal');
+        }
+
         if (!empty($redirect_after_login) && $target_system === APP_URL_PM) {
             header('Location: ' . APP_URL_PM . $redirect_after_login);
             exit;
@@ -84,26 +91,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['position']   = $user['position'];
             $_SESSION['avatar']     = $user['avatar'];
             
-            // --- TAMBAHKAN PENCATATAN LOG LOGIN BERHASIL ---
-            try {
-                $logStmt = $pdo->prepare("
-                    INSERT INTO login_logs (user_id, activity, ip_address, user_agent, created_at)
-                    VALUES (:user_id, 'login_success', :ip, :ua, NOW())
-                ");
-                $logStmt->execute([
-                    'user_id' => $user['id'],
-                    'ip'      => $_SERVER['REMOTE_ADDR'] ?? '',
-                    'ua'      => $_SERVER['HTTP_USER_AGENT'] ?? ''
-                ]);
-            } catch (PDOException $e) {
-                error_log('Login Log Error (index.php): ' . $e->getMessage());
-            }
-            // ----------------------------------------------
+            // --- PENCATATAN LOG LOGIN BERHASIL ---
+            logUserActivity((int) $user['id'], LOG_LOGIN_SUCCESS, [
+                'app_key'     => 'dashboard',
+                'app_name'    => 'Login Portal',
+                'description' => 'Login berhasil via Dashboard Portal',
+                'target_url'  => $target_url ?: '/dashboard/',
+            ]);
+
+            // Reset throttle aktivitas agar dashboard view pada sesi baru tercatat
+            unset($_SESSION['activity_log_throttle']);
 
             if (function_exists('logActivity')) {
                 logActivity($user['id'], 'login', 'User logged in via Dashboard Portal');
             }
-            
+
+            // Catat jika user langsung diarahkan ke aplikasi tertentu
+            if ($target_url) {
+                $targetApp = getAppByUrl($target_url);
+                if ($targetApp !== null) {
+                    logAppOpen((string) $targetApp['key'], $targetApp, (int) $user['id'], 'login langsung ke aplikasi');
+                }
+            }
+
             session_regenerate_id(true);
             
             // Redirect Logic
@@ -124,24 +134,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             
         } else {
-            // --- TAMBAHKAN PENCATATAN LOG LOGIN GAGAL ---
-            try {
-                // Ambil user_id jika usernamenya ada di database, jika tidak biarkan NULL
-                $userId = $user ? $user['id'] : null;
-                
-                $logStmt = $pdo->prepare("
-                    INSERT INTO login_logs (user_id, activity, ip_address, user_agent, created_at)
-                    VALUES (:user_id, 'login_failed', :ip, :ua, NOW())
-                ");
-                $logStmt->execute([
-                    'user_id' => $userId,
-                    'ip'      => $_SERVER['REMOTE_ADDR'] ?? '',
-                    'ua'      => $_SERVER['HTTP_USER_AGENT'] ?? ''
-                ]);
-            } catch (PDOException $e) {
-                error_log('Login Failed Log Error (index.php): ' . $e->getMessage());
-            }
-            // --------------------------------------------
+            // --- PENCATATAN LOG LOGIN GAGAL ---
+            $failedUserId = $user ? (int) $user['id'] : null;
+
+            logUserActivity($failedUserId, LOG_LOGIN_FAILED, [
+                'app_key'     => 'dashboard',
+                'app_name'    => 'Login Portal',
+                'description' => 'Login gagal untuk username: ' . ($username !== '' ? $username : '-'),
+                'target_url'  => $target_url ?: '/dashboard/',
+            ]);
 
             $error = 'Username atau password salah';
         }

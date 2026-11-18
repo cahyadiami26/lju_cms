@@ -5,31 +5,23 @@
  */
 
 require_once __DIR__ . '/config/session.php';
+require_once __DIR__ . '/config/database.php';
+require_once __DIR__ . '/config/activity_log.php';
 
 // Log logout activity (mendukung logout manual atau timeout)
 if (isLoggedIn()) {
-    try {
-        require_once __DIR__ . '/config/database.php';
-        $db = getDBConnection();
-        
-        // Tentukan jenis aktivitas berdasarkan parameter URL 'reason'
-        $reason = $_GET['reason'] ?? 'logout';
-        $activity = ($reason === 'timeout') ? 'timeout' : 'logout';
-        
-        $stmt = $db->prepare("
-            INSERT INTO login_logs (user_id, activity, ip_address, user_agent, created_at)
-            VALUES (:uid, :activity, :ip, :ua, NOW())
-        ");
-        $stmt->execute([
-            'uid'      => $_SESSION['user_id'],
-            'activity' => $activity,
-            'ip'       => $_SERVER['REMOTE_ADDR'],
-            'ua'       => $_SERVER['HTTP_USER_AGENT'] ?? ''
-        ]);
-    } catch (Exception $e) {
-        // Lanjutkan logout meskipun logging gagal
-        error_log('Logout Log Error: ' . $e->getMessage());
-    }
+    // Tentukan jenis aktivitas berdasarkan parameter URL 'reason'
+    $reason   = $_GET['reason'] ?? 'logout';
+    $activity = ($reason === 'timeout') ? LOG_TIMEOUT : LOG_LOGOUT;
+
+    logUserActivity((int) $_SESSION['user_id'], $activity, [
+        'app_key'     => 'dashboard',
+        'app_name'    => 'Login Portal',
+        'description' => ($activity === LOG_TIMEOUT)
+            ? 'Sesi berakhir karena tidak ada aktivitas'
+            : 'Logout dari portal dashboard',
+        'target_url'  => '/dashboard/',
+    ]);
 }
 
 // Hancurkan session menggunakan helper

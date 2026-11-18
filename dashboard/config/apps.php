@@ -12,12 +12,28 @@ if (!defined('APP_URL_PENGADAAN')) define('APP_URL_PENGADAAN', 'https://pengadaa
 if (!defined('APP_URL_HRD'))       define('APP_URL_HRD',       'https://hris.lju.co.id');
 if (!defined('APP_URL_WEBMAIL'))   define('APP_URL_WEBMAIL',   'open_webmail.php'); // Mengarah ke skrip pemroses API cPanel
 if (!defined('APP_URL_CMS'))       define('APP_URL_CMS',       'https://lju.co.id/admin');
-if (!defined('APP_URL_ASSESSMEMT'))       define('APP_URL_ASSESSMENT',       'https://assessment.lju.co.id');
+if (!defined('APP_URL_ASSESSMENT')) define('APP_URL_ASSESSMENT', 'https://assessment.lju.co.id');
+if (!defined('APP_URL_PRESENSI'))  define('APP_URL_PRESENSI',  'https://hris.lju.co.id/modules/attendance/checkin.php');
+if (!defined('APP_URL_ACTIVITY_LOG')) define('APP_URL_ACTIVITY_LOG', 'activity_logs.php');
 
 if (!function_exists('getAppsConfig')) {
     function getAppsConfig(): array
     {
         $apps = [
+            'presensi' => [
+                'name'          => 'Presensi Online',
+                'description'   => 'Presensi kehadiran karyawan harian (HRIS)',
+                'url'           => APP_URL_PRESENSI,
+                'icon_active'   => 'assets/images/apps/hrd-active.png',
+                'icon_inactive' => 'assets/images/apps/hrd-inactive.png',
+                'color'         => '#2563eb',
+                'color_light'   => '#dbeafe',
+                'emoji'         => '🕒',
+                'active'        => true,
+                'order'         => 0,
+                // Tampil sebagai tombol cepat di topbar, bukan kartu di grid
+                'hidden'        => true,
+            ],
             'dms' => [
                 'name'          => 'Naskah Dinas',
                 'description'   => 'Sistem pengelolaan naskah dinas digital',
@@ -134,6 +150,118 @@ if (!function_exists('getAppsConfig')) {
         });
 
         return $apps;
+    }
+}
+
+if (!function_exists('getAppByKey')) {
+    /**
+     * Ambil definisi satu aplikasi berdasarkan key (mis. 'dms', 'presensi').
+     */
+    function getAppByKey(string $key): ?array
+    {
+        $apps = getAppsConfig();
+        return $apps[$key] ?? null;
+    }
+}
+
+if (!function_exists('getAppByUrl')) {
+    /**
+     * Cari aplikasi berdasarkan URL tujuan (untuk tautan lama /target_system).
+     */
+    function getAppByUrl(string $url): ?array
+    {
+        $url = trim($url);
+        if ($url === '') {
+            return null;
+        }
+
+        foreach (getAppsConfig() as $key => $app) {
+            if (($app['url'] ?? '') === $url) {
+                return ['key' => $key] + $app;
+            }
+        }
+
+        // Cocokkan tanpa trailing slash
+        $needle = rtrim($url, '/');
+        foreach (getAppsConfig() as $key => $app) {
+            if (rtrim((string) ($app['url'] ?? ''), '/') === $needle) {
+                return ['key' => $key] + $app;
+            }
+        }
+
+        return null;
+    }
+}
+
+if (!function_exists('isUserDireksi')) {
+    function isUserDireksi(array $user): bool
+    {
+        $div  = strtolower((string) ($user['division'] ?? ''));
+        $dept = strtolower((string) ($user['department'] ?? ''));
+        $role = strtolower((string) ($user['role'] ?? ''));
+
+        return $div === 'direksi' || $dept === 'direksi' || $role === 'admin';
+    }
+}
+
+if (!function_exists('isUserInfokom')) {
+    function isUserInfokom(array $user): bool
+    {
+        return strtolower((string) ($user['division'] ?? '')) === 'infokom';
+    }
+}
+
+if (!function_exists('getAppAccessState')) {
+    /**
+     * Tentukan status akses satu aplikasi untuk user.
+     *
+     * @return array{active: bool, forbidden: bool, badge: string|null, label: string|null, reason: string|null}
+     *   badge: 'inactive' | 'direksi' | 'infokom' | null
+     */
+    function getAppAccessState(string $key, array $user, ?array $app = null): array
+    {
+        $app = $app ?? (getAppsConfig()[$key] ?? []);
+
+        // Aplikasi nonaktif dari konfigurasi
+        if (empty($app['active'])) {
+            return [
+                'active'    => false,
+                'forbidden' => false,
+                'badge'     => 'inactive',
+                'label'     => 'Segera Hadir',
+                'reason'    => 'Aplikasi belum aktif',
+            ];
+        }
+
+        // WBS hanya untuk Direksi (dan admin)
+        if ($key === 'wbs' && !isUserDireksi($user)) {
+            return [
+                'active'    => false,
+                'forbidden' => true,
+                'badge'     => 'direksi',
+                'label'     => 'Khusus Direksi',
+                'reason'    => 'Akses WBS hanya untuk Direksi',
+            ];
+        }
+
+        // WebContent hanya untuk Infokom
+        if ($key === 'cms' && !isUserInfokom($user)) {
+            return [
+                'active'    => false,
+                'forbidden' => false,
+                'badge'     => 'infokom',
+                'label'     => 'Khusus Infokom',
+                'reason'    => 'Akses WebContent hanya untuk Infokom',
+            ];
+        }
+
+        return [
+            'active'    => true,
+            'forbidden' => false,
+            'badge'     => null,
+            'label'     => null,
+            'reason'    => null,
+        ];
     }
 }
 

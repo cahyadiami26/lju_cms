@@ -6,8 +6,14 @@
 require_once __DIR__ . '/../config/session.php';
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../config/apps.php'; 
+require_once __DIR__ . '/../config/activity_log.php';
 
 $user = getSessionUser();
+
+// Catat aktivitas membuka dashboard (maksimal sekali per 15 menit per sesi)
+if (!empty($user['id'])) {
+    logDashboardView((int) $user['id']);
+}
 
 $avatarUrl = !empty($user['avatar']) ? 'https://dms.lju.co.id/uploads/avatars/' . htmlspecialchars($user['avatar']) : '';
 $photoUrl  = !empty($user['photo']) ? 'https://dms.lju.co.id/uploads/photos/' . htmlspecialchars($user['photo']) : '';
@@ -22,6 +28,14 @@ $userRole = strtolower($user['role'] ?? '');
 
 $isInfokom = ($userDiv === 'infokom');
 $isDireksi = ($userDiv === 'direksi' || $userDept === 'direksi' || $userRole === 'admin');
+
+// Hak akses halaman laporan aktivitas: admin atau Infokom
+$canViewActivityLog = ($userRole === 'admin' || $isInfokom || $isDireksi);
+
+// Pesan jika akses aplikasi ditolak (dari go.php)
+$deniedKey   = trim((string) ($_GET['denied'] ?? ''));
+$deniedApp   = $deniedKey !== '' ? getAppByKey($deniedKey) : null;
+$deniedLabel = $deniedApp['name'] ?? $deniedKey;
 
 $jumlahUserOnline = getActiveUserCount();
 $onlineUsersList  = getOnlineUsersList();
@@ -196,11 +210,46 @@ $timeout = $_SESSION['last_activity'];
         }
         .btn-logout svg { width: 16px; height: 16px; flex-shrink: 0; }
 
+        /* Tombol laporan aktivitas (admin / Infokom) */
+        .btn-activity {
+            background: #eff6ff;
+            color: var(--primary-blue);
+            border: 1px solid #dbeafe;
+            padding: 8px 12px;
+            border-radius: 10px;
+            font-size: 13px;
+            font-weight: 700;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .btn-activity:hover { background: var(--primary-blue); color: #fff; box-shadow: 0 4px 12px rgba(30, 64, 175, 0.2); }
+        .btn-activity svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+        /* Notifikasi akses ditolak */
+        .notice-denied {
+            max-width: 720px;
+            margin: 0 auto 24px auto;
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            color: #991b1b;
+            padding: 12px 16px;
+            border-radius: 12px;
+            font-size: 13px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .notice-denied svg { width: 18px; height: 18px; flex-shrink: 0; }
+
         @media (max-width: 600px) {
             .nav-container { padding: 10px 16px; height: 56px; }
             .brand img, .brand-logo { height: 30px; max-width: 120px; }
-            .btn-logout .logout-text, .topbar-attendance-btn span { display: none; }
-            .topbar-attendance-btn { padding: 8px; border-radius: 8px; }
+            .btn-logout .logout-text, .btn-activity .activity-text, .topbar-attendance-btn span { display: none; }
+            .topbar-attendance-btn, .btn-activity { padding: 8px; border-radius: 8px; }
             .user-avatar { width: 36px; height: 36px; min-width: 36px; font-size: 14px; }
         }
 
@@ -466,13 +515,20 @@ $timeout = $_SESSION['last_activity'];
         </a>
 
         <div class="user-nav">
-            <!-- Tombol Presensi Online di Topbar -->
-            <a href="https://hris.lju.co.id/modules/attendance/checkin.php" class="topbar-attendance-btn" target="_blank" rel="noopener" title="Presensi Online">
+            <!-- Tombol Presensi Online di Topbar (dicatat melalui go.php) -->
+            <a href="go.php?app=presensi" class="topbar-attendance-btn" target="_blank" rel="noopener" title="Presensi Online">
                 <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                 </svg>
                 <span>Presensi Online</span>
             </a>
+
+            <?php if ($canViewActivityLog): ?>
+                <a href="activity_logs.php" class="btn-activity" title="Lihat log aktivitas pengguna">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-6m4 6V7m4 10v-3M5 21h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
+                    <span class="activity-text">Log Aktivitas</span>
+                </a>
+            <?php endif; ?>
             
             <div class="user-meta">
                 <div class="name"><?= htmlspecialchars($user['name'] ?: $user['username']) ?></div>
@@ -497,6 +553,13 @@ $timeout = $_SESSION['last_activity'];
 </nav>
 
 <div class="container">
+    <?php if ($deniedKey !== ''): ?>
+        <div class="notice-denied">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
+            <span>Akses ke <strong><?= htmlspecialchars($deniedLabel) ?></strong> tidak diizinkan untuk akun Anda. Percobaan akses ini sudah dicatat.</span>
+        </div>
+    <?php endif; ?>
+
     <div class="hero">
         <h1>Selamat Datang, <?= htmlspecialchars($user['name'] ?? $user['username']) ?></h1>
         <p><center><?php echo htmlspecialchars($email); ?></center><br>Silakan pilih layanan sistem informasi yang ingin Anda akses</p>
@@ -514,18 +577,15 @@ $timeout = $_SESSION['last_activity'];
     <div class="apps-grid">
         <?php foreach ($apps as $key => $app): ?>
             <?php 
-                $isActive    = (bool) $app['active'];
-                $isForbidden = false;
-                $infokomOnly = true;
+                // Aplikasi "hidden" hanya tampil sebagai tombol cepat (mis. Presensi di topbar)
+                if (!empty($app['hidden'])) {
+                    continue;
+                }
 
-                if ($key === 'wbs' && !$isDireksi) {
-                    $isActive    = false;
-                    $isForbidden = true;
-                }
-                if ($key === 'cms' && !$isInfokom) {
-                    $isActive    = false;
-                    $infokomOnly = false;
-                }
+                $access      = getAppAccessState($key, $user, $app);
+                $isActive    = $access['active'];
+                $isForbidden = $access['forbidden'];
+
                 if ($isForbidden) {
                     $cardStatus = 'forbidden';
                 } elseif (!$isActive) {
@@ -539,9 +599,12 @@ $timeout = $_SESSION['last_activity'];
                 $cardColor = $app['color'] ?? '#1e40af';
                 list($r,$g, $b) = sscanf($cardColor, "#%02x%02x%02x");
                 $colorRGB = "$r, $g,$b";
+
+                // Klik aplikasi dicatat oleh go.php sebelum redirect
+                $cardHref = $isActive ? 'go.php?app=' . urlencode($key) : 'javascript:void(0)';
             ?>
             <a 
-                href="<?= $isActive ? htmlspecialchars($app['url']) : 'javascript:void(0)' ?>" 
+                href="<?= htmlspecialchars($cardHref) ?>" 
                 class="app-card <?= $cardStatus ?>"
                 style="--card-color: <?= $cardColor ?>; --card-rgb: <?= $colorRGB ?>;"
                 <?= $isActive && $key === 'webmail' ? 'target="_blank" rel="noopener"' : ($isActive ? 'target="_self" rel="noopener"' : 'tabindex="-1" aria-disabled="true"') ?>
@@ -549,16 +612,14 @@ $timeout = $_SESSION['last_activity'];
                 <?php if ($isForbidden): ?>
                     <span class="badge badge-forbidden">
                         <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
-                        Khusus Direksi
+                        <?= htmlspecialchars($access['label'] ?: 'Khusus Direksi') ?>
                     </span>
-                <?php elseif (!$isActive): ?>
-                    <span class="badge badge-inactive">Segera Hadir</span>
-                <?php endif; ?>
-                
-                <?php if (!$infokomOnly): ?>
+                <?php elseif ($access['badge'] === 'inactive'): ?>
+                    <span class="badge badge-inactive"><?= htmlspecialchars($access['label'] ?: 'Segera Hadir') ?></span>
+                <?php elseif ($access['badge'] === 'infokom'): ?>
                     <span class="badge badge-forbidden">
                         <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
-                        Khusus Infokom
+                        <?= htmlspecialchars($access['label'] ?: 'Khusus Infokom') ?>
                     </span>
                 <?php endif; ?>
 
@@ -609,7 +670,7 @@ $timeout = $_SESSION['last_activity'];
                             </div>
                         </div>
                         <div class="online-user-time">
-                            Login: <?= date('H:i', strtotime($uOnline['last_login'])) ?> WIB
+                            Aktif: <?= date('H:i', strtotime($uOnline['last_login'])) ?> WIB
                         </div>
                     </div>
                 <?php endforeach; ?>

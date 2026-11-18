@@ -90,7 +90,7 @@ function getSessionUser(): array
     }
 
     // Mengembalikan array data user sesuai struktur yang diminta
-    return [
+    $result = [
         'id'           => $_SESSION['user_id']       ?? '',
         'nik'          => $_SESSION['user_nik']      ?? '',
         'username'     => $_SESSION['username']      ?? '',
@@ -107,7 +107,10 @@ function getSessionUser(): array
         'webmail_user' => $_SESSION['webmail_user']  ?? '',
         'webmail_pass' => $_SESSION['webmail_pass']  ?? '',
     ];
+
     checkSessionTimeout();
+
+    return $result;
 }
 
 function isLoggedIn(): bool
@@ -141,18 +144,15 @@ function destroySession(): void
 function logSessionActivity(int $userId, string $activity): void
 {
     try {
-        require_once __DIR__ . '/config/database.php';
-        $db = getDBConnection();
-        
-        $stmt = $db->prepare("
-            INSERT INTO login_logs (user_id, activity, ip_address, user_agent, created_at)
-            VALUES (:user_id, :activity, :ip, :ua, NOW())
-        ");
-        $stmt->execute([
-            'user_id'  => $userId,
-            'activity' => $activity,
-            'ip'       => $_SERVER['REMOTE_ADDR'] ?? '',
-            'ua'       => $_SERVER['HTTP_USER_AGENT'] ?? ''
+        require_once __DIR__ . '/activity_log.php';
+
+        logUserActivity($userId, $activity, [
+            'app_key'     => 'dashboard',
+            'app_name'    => 'Login Portal',
+            'description' => ($activity === 'timeout')
+                ? 'Sesi berakhir karena tidak ada aktivitas'
+                : 'Logout dari portal dashboard',
+            'target_url'  => '/dashboard/',
         ]);
     } catch (\Throwable $e) {
         error_log('Session Log Error: ' . $e->getMessage());
@@ -176,7 +176,7 @@ function checkSessionTimeout(): void
             }
             
             destroySession();
-            header('Location: /login.php?timeout=1');
+            header('Location: /dashboard/?status=timeout');
             exit;
         }
     }

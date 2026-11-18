@@ -13,7 +13,7 @@ define('DB_HOST', env('DB_HOST', 'localhost'));
 define('DB_PORT', env('DB_PORT', '3306'));
 define('DB_NAME', env('DB_NAME', 'ljucoid_dms'));
 define('DB_USER', env('DB_USER', 'ljucoid_dms'));
-define('DB_PASS', env('DB_PASS', 'icikiwir2026'));
+define('DB_PASS', env('DB_PASS', ''));
 define('DB_CHARSET', env('DB_CHARSET', 'utf8mb4'));
 
 define('BIDANG', [
@@ -64,17 +64,21 @@ function getActiveUserCount(): int {
     global $pdo;
     if (!$pdo) { $pdo = getDBConnection(); }
 
+    // User dianggap online jika aktivitas terakhirnya hari ini bukan logout/timeout/gagal login.
+    // Aktivitas klik aplikasi (open_*) tetap dihitung sebagai online.
     $sql = "
         WITH latest_activity AS (
             SELECT user_id, activity, created_at,
-                   ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC) as rn
-            FROM login_logs WHERE user_id != 1
+                   ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC, id DESC) as rn
+            FROM login_logs
+            WHERE user_id IS NOT NULL
         )
         SELECT COUNT(*) AS jumlah_user_login
         FROM latest_activity
-        WHERE rn = 1 
-          AND activity = 'login_success' 
-          AND DATE(created_at) = CURDATE();
+        WHERE rn = 1
+          AND activity NOT IN ('logout', 'timeout', 'login_failed')
+          AND DATE(created_at) = CURDATE()
+          AND user_id != 1;
     ";
 
     try {
@@ -97,14 +101,16 @@ function getOnlineUsersList(): array {
     $sql = "
         WITH latest_activity AS (
             SELECT user_id, activity, created_at, ip_address,
-                   ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC) as rn
+                   ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC, id DESC) as rn
             FROM login_logs
+            WHERE user_id IS NOT NULL
         )
-        SELECT u.id, u.username, u.name, u.email, u.position, u.division, u.department, u.avatar, la.created_at as last_login
+        SELECT u.id, u.username, u.name, u.email, u.position, u.division, u.department, u.avatar,
+               la.created_at as last_login, la.activity as last_activity
         FROM latest_activity la
         JOIN users u ON la.user_id = u.id
-        WHERE la.rn = 1  
-          AND la.activity = 'login_success' 
+        WHERE la.rn = 1
+          AND la.activity NOT IN ('logout', 'timeout', 'login_failed')
           AND DATE(la.created_at) = CURDATE()
           AND u.id != 1
         ORDER BY la.created_at DESC;

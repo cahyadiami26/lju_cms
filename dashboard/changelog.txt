@@ -1,0 +1,434 @@
+========================================================================
+CHANGELOG - LJU PORTAL DASHBOARD
+Fitur: Pencatatan Log Aktivitas User (tabel login_logs)
+Tanggal: 18 November 2026
+Lokasi : https://lju.co.id/dashboard
+========================================================================
+
+RINGKASAN
+------------------------------------------------------------------------
+Sebelumnya tabel login_logs hanya mencatat login, login gagal, logout,
+dan timeout. Setelah perubahan ini, seluruh aktivitas user setelah login
+ikut tercatat: pembukaan dashboard dan klik setiap tombol aplikasi
+(Presensi Online, Naskah Dinas, Pengarsipan, Pengadaan, Task Management,
+SDM/HRD, Webmail, Whistleblower, WebContent, Assessment), termasuk
+percobaan membuka aplikasi yang tidak diizinkan.
+
+Setiap klik kartu aplikasi kini melewati go.php yang mencatat aktivitas
+di server lebih dulu, baru mengalihkan user ke aplikasi tujuan. Karena
+pencatatan dilakukan di server, log tetap tercatat walaupun tautan dibuka
+di tab baru, diklik dengan tombol tengah mouse, atau URL-nya disalin.
+
+Ringkasan jumlah berkas:
+  - File baru    : 5
+  - File diubah  : 11
+  - Skema database: tabel login_logs (migrasi wajib, lihat bagian 5)
+
+
+1. FILE BARU
+========================================================================
+
+1.1 config/activity_log.php
+------------------------------------------------------------------------
+Pusat pencatatan aktivitas dan query laporan.
+
+  Konstanta kode aktivitas:
+    LOG_LOGIN_SUCCESS         = login_success
+    LOG_LOGIN_GOOGLE_SUCCESS  = login_google_success
+    LOG_LOGIN_FAILED          = login_failed
+    LOG_LOGOUT                = logout
+    LOG_TIMEOUT               = timeout
+    LOG_DASHBOARD             = open_dashboard
+    LOG_UPDATE_PROFILE        = update_profile
+    LOG_ACCESS_DENIED         = access_denied
+
+  Fungsi:
+    getLogClientIp()          - ambil IP klien (REMOTE_ADDR)
+    getLogUserAgent()         - ambil user agent
+    logUserActivity()         - INSERT utama ke login_logs, menerima
+                                user_id, activity, dan opsi app_key,
+                                app_name, description, target_url
+    logUserActivityLegacy()   - fallback bila tabel belum dimigrasi;
+                                hanya menulis kolom lama dan memetakan
+                                kode open_* ke login_success agar portal
+                                tidak error sebelum migrasi
+    logAppOpen()              - catat aktivitas open_<key> + nama
+                                aplikasi, URL tujuan, dan sumber klik
+    logEventOnce()            - catat event maksimal sekali per N detik
+                                per sesi (dipakai untuk dashboard)
+    markActivityThrottle()    - simpan penanda waktu throttle di session
+    logDashboardView()        - catat open_dashboard, throttle 15 menit
+    getActivityCatalog()      - daftar label/ikon/warna semua kode
+                                aktivitas, termasuk open_<key> yang
+                                dibangun otomatis dari config/apps.php
+    getActivityMeta()         - metadata satu kode aktivitas
+    buildActivityLogWhere()   - susun WHERE + parameter filter laporan
+                                (user, app, activity, date_from, date_to)
+    getActivityLogs()         - daftar log + join tabel users, dengan
+                                pagination; mengembalikan rows dan flag
+                                schema_ready (false = skema lama)
+    countActivityLogs()       - total baris sesuai filter
+    getActivityLogStats()     - statistik hari ini: total aktivitas,
+                                login, pengguna aktif, akses ditolak,
+                                dan 5 aplikasi teratas
+
+  Catatan: bila kolom baru belum ada, fungsi utama mendeteksi error
+  skema, menulis peringatan ke error_log, lalu memakai jalur legacy.
+
+1.2 go.php
+------------------------------------------------------------------------
+Endpoint pencatat klik aplikasi sekaligus redirect.
+
+  - Parameter utama : go.php?app=<key>
+  - Kompatibilitas   : go.php?target_system=<url> (tautan lama, dicocokkan
+                       lewat getAppByUrl())
+  - Alur:
+      1) user belum login  -> redirect index.php?target_system=<url>
+      2) key tidak dikenal -> redirect index.php
+      3) akses tidak aktif -> catat access_denied, lalu redirect
+                              index.php?denied=<key> (banner di dashboard)
+      4) akses valid       -> catat open_<key> via logAppOpen()
+      5) redirect 302 ke URL aplikasi tujuan
+  - Mencatat juga nama aplikasi, URL tujuan, dan sumber klik.
+
+1.3 activity_logs.php
+------------------------------------------------------------------------
+Halaman laporan log aktivitas.
+  - Hak akses: admin, Infokom, Direksi. Selain itu HTTP 403.
+  - Filter: pengguna (nama/username/ID), aplikasi, aktivitas, rentang
+    tanggal, plus preset Hari ini / 7 hari / 30 hari.
+  - KPI hari ini: total aktivitas, login, pengguna aktif, akses ditolak.
+  - Panel samping: 5 aplikasi teratas hari ini dan ringkasan akses
+    ditolak, plus catatan cara pencatatan.
+  - Pagination 50 baris, parameter filter dipertahankan.
+  - Peringatan + tautan ke migrate_login_logs.php bila skema belum
+    lengkap (schema_ready = false).
+  - Tampilan responsif:
+      <= 900px : kolom IP dilepas agar keterangan tetap terbaca
+      <= 640px : tabel berubah menjadi daftar baris bertumpuk tanpa
+                 scroll horizontal (waktu/nama di atas, aktivitas,
+                 keterangan 2 baris, IP di bawah)
+  - Helper lokal: h(), activityTone(), userHue(), relativeTime().
+
+1.4 migrate_login_logs.php
+------------------------------------------------------------------------
+Halaman migrasi skema sekali jalan (harus login sebagai admin/Infokom/
+Direksi), idempoten, menampilkan status tiap langkah:
+  - Membuat tabel login_logs bila belum ada
+  - Mengubah activity ENUM -> VARCHAR(50)
+  - Membuat user_id boleh NULL (login gagal tanpa akun terdaftar)
+  - Menambah kolom app_key, app_name, description, target_url
+  - Memperbesar user_agent menjadi VARCHAR(1000)
+  - Menambah index idx_login_logs_user_created,
+    idx_login_logs_activity_created, idx_login_logs_app_created
+Tombol "Jalankan Migrasi" hanya tampil bila skema belum lengkap.
+Setelah migrasi berhasil, file ini boleh dihapus.
+
+1.5 login_logs_schema.sql
+------------------------------------------------------------------------
+Skema referensi untuk instalasi baru, berisi:
+  - CREATE TABLE login_logs versi lengkap (kolom aktivitas + index)
+  - Blok ALTER TABLE untuk migrasi manual (dikomentari, dijalankan
+    baris per baris lewat phpMyAdmin)
+  - Contoh query laporan: aktivitas terakhir per user, rekap klik per
+    aplikasi hari ini, rekap pemakaian aplikasi per user 30 hari
+
+
+2. FILE DIUBAH
+========================================================================
+
+2.1 index.php
+------------------------------------------------------------------------
+  - require_once config/activity_log.php
+  - Login berhasil: INSERT manual diganti logUserActivity() dengan kode
+    login_success + app_key/app_name/description/target_url.
+  - Session throttle aktivitas di-reset setiap login baru agar
+    kunjungan dashboard pada sesi baru tetap tercatat.
+  - Bila login membawa target_system, aplikasi tujuan ikut dicatat
+    sebagai open_<key> (login langsung ke aplikasi).
+  - Login gagal: INSERT manual diganti logUserActivity(); user_id
+    dikirim NULL bila username tidak terdaftar, dan username yang
+    dicoba disimpan di description.
+  - User yang sudah login lalu membuka index.php dengan target_system
+    valid: aktivitas aplikasi tujuan dicatat sebelum redirect.
+
+2.2 google_callback.php
+------------------------------------------------------------------------
+  - require_once config/activity_log.php
+  - Login Google berhasil dicatat sebagai login_google_success beserta
+    alamat email Google di description.
+  - Throttle aktivitas di-reset untuk sesi baru.
+  - Bila ada target_system, aplikasi tujuan dicatat sebagai open_<key>.
+
+2.3 logout.php
+------------------------------------------------------------------------
+  - Ditulis ulang memakai helper: require config/session.php,
+    config/database.php, config/activity_log.php.
+  - Parameter ?reason=timeout mencatat timeout, selain itu logout.
+  - Log ditulis lewat logUserActivity() (bukan INSERT manual), tetap
+    menyertakan app_key/app_name/description/target_url.
+  - destroySession() dan redirect ke /dashboard/?status=logged_out
+    &reason=<manual|timeout>.
+
+2.4 config/session.php
+------------------------------------------------------------------------
+  - logSessionActivity() diperbaiki: sebelumnya memuat
+    __DIR__ . '/config/database.php' (path salah) sehingga logging
+    logout/timeout tidak pernah berjalan; sekarang memakai
+    config/activity_log.php dan logUserActivity().
+  - getSessionUser(): checkSessionTimeout() sebelumnya dipanggil
+    setelah "return" sehingga tidak pernah dieksekusi; sekarang
+    dipanggil sebelum data user dikembalikan.
+  - Redirect saat sesi habis diperbaiki dari /login.php?timeout=1
+    (file tidak ada) menjadi /dashboard/?status=timeout.
+
+2.5 config/database.php
+------------------------------------------------------------------------
+  - getActiveUserCount(): user dianggap online bila aktivitas
+    terakhirnya hari ini dan bukan logout, timeout, atau login_failed.
+    Sebelumnya hanya activity = 'login_success', sehingga user yang
+    membuka aplikasi langsung dianggap offline.
+  - getOnlineUsersList(): query disamakan (ROW_NUMBER atas user_id),
+    menambahkan kolom last_activity dan ip_address serta mengabaikan
+    baris dengan user_id NULL.
+  - Modal daftar user online di dashboard kini menampilkan waktu
+    aktivitas terakhir ("Aktif: HH:MM WIB").
+
+2.6 config/apps.php
+------------------------------------------------------------------------
+  - Memperbaiki typo konstanta: APP_URL_ASSESSMEMT (tidak pernah
+    terdefinisi karena kondisi if-nya salah) menjadi APP_URL_ASSESSMENT.
+  - Menambah APP_URL_PRESENSI dan APP_URL_ACTIVITY_LOG.
+  - Menambah entri aplikasi 'presensi' (Presensi Online) dengan
+    'hidden' => true, sehingga hanya tampil sebagai tombol cepat di
+    topbar, bukan kartu di grid.
+  - Fungsi baru:
+      getAppByKey()      - ambil definisi aplikasi dari key
+      getAppByUrl()      - cari aplikasi dari URL (tautan lama/SSO),
+                           toleran terhadap trailing slash
+      isUserDireksi()    - cek divisi/departemen Direksi atau role admin
+      isUserInfokom()    - cek divisi Infokom
+      getAppAccessState()- status akses satu aplikasi: aktif, nonaktif,
+                           khusus Direksi (WBS), khusus Infokom (CMS),
+                           beserta label badge dan alasan penolakan
+
+2.7 views/dashboard.php
+------------------------------------------------------------------------
+  - require_once config/activity_log.php dan logDashboardView() untuk
+    mencatat kunjungan dashboard (maksimal 1x per 15 menit per sesi).
+  - Semua kartu aplikasi diarahkan ke go.php?app=<key> (sebelumnya
+    langsung ke URL aplikasi), sehingga kliknya tercatat.
+  - Tombol Presensi Online di topbar diarahkan ke
+    go.php?app=presensi (tetap membuka tab baru).
+  - Aplikasi bertanda 'hidden' dilewati saat merender grid.
+  - Status akses kartu memakai getAppAccessState(); badge "Khusus
+    Direksi", "Khusus Infokom", dan "Segera Hadir" dirender dari data
+    tersebut (sebelumnya perhitungan manual dan badge Infokom salah
+    tampil).
+  - Tombol "Log Aktivitas" di navbar untuk admin/Infokom/Direksi.
+  - Banner notifikasi bila go.php menolak akses
+    (index.php?denied=<key>): "Akses ke <aplikasi> tidak diizinkan...".
+  - CSS baru: .btn-activity dan .notice-denied; pada layar <= 600px
+    label teks tombol topbar disembunyikan sehingga hanya ikon tampil.
+  - Label waktu di modal user online diubah dari "Login:" menjadi
+    "Aktif:" mengikuti aktivitas terakhir.
+
+2.8 update_profile.php
+------------------------------------------------------------------------
+  - require_once config/activity_log.php
+  - Setelah profil berhasil diperbarui, aktivitas update_profile
+    dicatat beserta daftar bagian yang berubah (password, avatar, foto,
+    tanda tangan).
+
+2.9 db.sql
+------------------------------------------------------------------------
+  - Definisi tabel login_logs diperbarui mengikuti skema baru
+    (activity VARCHAR(50), user_id NULL, app_key, app_name,
+    description, target_url, user_agent VARCHAR(1000), tiga index,
+    komentar kolom).
+
+2.10 users_schema.sql
+------------------------------------------------------------------------
+  - Blok CREATE TABLE login_logs diperbarui dengan skema dan index
+    yang sama seperti db.sql, termasuk komentar penggunaan.
+
+2.11 readme.md
+------------------------------------------------------------------------
+  - Sebelumnya kosong; kini berisi dokumentasi:
+    alur pencatatan, skema tabel, daftar kode aktivitas, langkah
+    migrasi, penjelasan halaman laporan, contoh pemakaian helper untuk
+    aplikasi lain, cara menambah aplikasi baru, daftar berkas terkait,
+    dan troubleshooting.
+
+
+3. DAFTAR KODE AKTIVITAS
+========================================================================
+Login & sesi : login_success, login_google_success, login_nfc_success,
+               login_failed, logout, timeout
+Navigasi     : open_dashboard, open_presensi, open_dms, open_arsip,
+               open_pengadaan, open_pm, open_hrd, open_webmail,
+               open_wbs, open_cms, open_assessment
+Lain-lain    : update_profile, access_denied
+
+Label tampilan diambil dari getActivityCatalog()/getActivityMeta(),
+sehingga aplikasi baru otomatis mendapat label "Membuka <nama aplikasi>".
+
+
+4. PERUBAHAN SKEMA DATABASE (tabel login_logs)
+========================================================================
+Kolom baru:
+  app_key      VARCHAR(50)  NULL  - key aplikasi (presensi, dms, arsip,
+                                    pengadaan, pm, hrd, webmail, wbs,
+                                    cms, assessment, dashboard)
+  app_name     VARCHAR(100) NULL  - nama aplikasi saat tombol diklik
+  description  VARCHAR(255) NULL  - keterangan yang mudah dibaca
+  target_url   VARCHAR(255) NULL  - URL tujuan
+
+Kolom diubah:
+  activity     ENUM(...) -> VARCHAR(50)  (agar kode open_* bisa masuk)
+  user_id      NOT NULL  -> NULL         (login gagal tanpa akun)
+  user_agent   VARCHAR(255)/TEXT -> VARCHAR(1000)
+
+Index baru:
+  idx_login_logs_user_created      (user_id, created_at)
+  idx_login_logs_activity_created  (activity, created_at)
+  idx_login_logs_app_created       (app_key, created_at)
+
+
+5. LANGKAH SETELAH DEPLOY (WAJIB)
+========================================================================
+1) Login sebagai admin / Infokom / Direksi.
+2) Buka https://lju.co.id/dashboard/migrate_login_logs.php
+3) Klik "Jalankan Migrasi" dan pastikan semua langkah berstatus
+   Berhasil/Dilewati.
+4) Hapus migrate_login_logs.php dari server setelah selesai.
+
+Selama migrasi belum dijalankan portal tetap berjalan normal: logger
+otomatis memakai format kolom lama (kode open_* dipetakan ke
+login_success) dan hanya menulis peringatan ke error_log. Detail
+aplikasi baru tersimpan lengkap setelah migrasi.
+
+Alternatif manual: jalankan blok SQL pada login_logs_schema.sql melalui
+phpMyAdmin (tab SQL).
+
+
+6. CATATAN PENGUJIAN
+========================================================================
+- php -l bersih untuk semua file PHP yang baru dan diubah.
+- Uji integrasi lolos: skema lama (fallback) -> migrasi -> insert
+  lengkap -> user_id NULL -> throttle dashboard -> query laporan ->
+  hitung user online -> statistik akses ditolak -> label aktivitas.
+- Uji HTTP: go.php mengembalikan 302 yang benar untuk presensi, wbs,
+  cms, dan target_system legacy; key tak dikenal diarahkan ke
+  index.php; tanpa login diarahkan ke index.php?target_system=...
+- Tampilan diperiksa pada lebar 1440, 1024, 768, dan 390 px tanpa
+  overflow; halaman migrasi dan dashboard juga diperiksa.
+
+
+7. FILE YANG TIDAK BERUBAH
+========================================================================
+  - views/login.php
+  - google_auth.php
+  - open_webmail.php
+  - google_setup_check.php
+  - config/env.php, config/google.php
+  - controller/ (tidak dipakai oleh alur portal ini)
+
+
+8. PEMBARUAN: PENGECUALIAN ADMINISTRATOR (user_id = 1)
+========================================================================
+Tanggal: 18 November 2026 (setelah fitur log aktivitas selesai)
+
+Permintaan: aktivitas akun Administrator (user_id = 1) tidak ikut dicatat.
+
+Yang diubah:
+  - config/activity_log.php
+      * Konstanta ACTIVITY_LOG_EXCLUDED_USER_IDS (default [1]) berisi
+        daftar user_id yang aktivitasnya tidak dicatat.
+      * Konstanta ACTIVITY_LOG_EXCLUDED_ALLOW (default []) berisi kode
+        aktivitas yang tetap dicatat untuk user tersebut.
+      * Fungsi baru isActivityLogExcluded() untuk memeriksa keduanya.
+      * Pengecekan dipasang di awal logUserActivity(), sehingga berlaku
+        untuk semua jalur: login, login Google, login gagal, logout,
+        timeout, kunjungan dashboard, klik aplikasi (go.php),
+        update_profile, dan access_denied.
+      * logAppOpen(), logEventOnce(), dan logDashboardView() otomatis
+        ikut terpengaruh karena memanggil logUserActivity().
+  - readme.md
+      * Bagian 3.1 Pengecualian user (Administrator): cara mengubah
+        daftar user dan cara mempertahankan log login/logout admin.
+      * Tambahan pada bagian troubleshooting.
+
+Tidak perlu diubah:
+  - File pemanggil log (index.php, go.php, logout.php,
+    google_callback.php, update_profile.php, views/dashboard.php)
+    karena semuanya memakai helper yang sama.
+  - Query user online di config/database.php memang sudah mengabaikan
+    user_id = 1 sejak awal.
+
+Bila ingin login/logout Administrator tetap terekam:
+  define('ACTIVITY_LOG_EXCLUDED_ALLOW',
+          ['login_success', 'login_google_success', 'logout', 'timeout']);
+
+Membersihkan log lama milik Administrator:
+  DELETE FROM login_logs WHERE user_id = 1;
+
+Hasil pengujian:
+  - logUserActivity(1, ...) untuk open_dms, login_success, access_denied
+    mengembalikan false dan tidak menambah baris.
+  - logAppOpen() dan logDashboardView() untuk user 1 juga tidak menulis.
+  - User biasa (user_id 2), login gagal tanpa akun (user_id NULL), dan
+    kunjungan dashboard user biasa tetap tercatat.
+  - Dengan ACTIVITY_LOG_EXCLUDED_ALLOW = ['login_success'], login admin
+    tercatat sedangkan klik aplikasi tetap diabaikan.
+
+
+9. PEMBARUAN: KARTU LOGIN PER PENGGUNA
+========================================================================
+Tanggal: 18 November 2026
+
+Permintaan: hapus kartu "Cara pencatatan" pada activity_logs.php dan
+ganti dengan kartu jumlah login per user sesuai periode yang dipilih,
+dengan mengecualikan akun pada ACTIVITY_LOG_EXCLUDED_USER_IDS.
+
+Yang diubah:
+  - config/activity_log.php
+      * Fungsi baru getLoginCountsByUser($dateFrom, $dateTo, $limit):
+        menghitung login_success + login_google_success +
+        login_nfc_success per user pada rentang tanggal, urut dari
+        jumlah terbanyak, mengembalikan rows, total_users, dan
+        total_logins (total dihitung terpisah sehingga tetap benar
+        walau daftar dibatasi).
+      * Akun pada ACTIVITY_LOG_EXCLUDED_USER_IDS (default user_id 1)
+        dikecualikan lewat klausa NOT IN.
+  - activity_logs.php
+      * Panel "Cara pencatatan" dihapus.
+      * Panel baru "Login per pengguna": 10 pengguna teratas, nama +
+        jabatan, jumlah login, bar proporsional, dan footer total
+        (jumlah login dan jumlah pengguna).
+      * Judul panel menampilkan periode aktif: "Hari ini",
+        "7 hari terakhir", "30 hari terakhir", atau rentang tanggal
+        manual (dd/mm/yyyy - dd/mm/yyyy).
+      * Catatan kecil "Tidak termasuk user_id <daftar>." di bawah
+        footer agar angka tidak membingungkan.
+      * Peringatan skema belum dimigrasi dipindahkan dari panel yang
+        dihapus menjadi banner di atas grid konten, tetap dengan
+        tautan ke migrate_login_logs.php.
+      * CSS baru: .top-app-sub, .panel-foot, .panel-note,
+        .panel-empty, .notice-migrate; aturan .side-note dihapus.
+  - readme.md
+      * Bagian 5 menjelaskan kartu Login per pengguna dan alasan
+        angkanya bisa berbeda dengan KPI "Login hari ini".
+      * Bagian 3.1 menegaskan kartu rekap login ikut mengecualikan
+        akun yang ada di daftar pengecualian.
+
+Hasil pengujian:
+  - getLoginCountsByUser() untuk presets hari ini / 7 hari / 30 hari
+    mengembalikan data benar; Administrator tidak muncul.
+  - Periode tanpa data -> 0 login, 0 baris; limit 2 tetap melaporkan
+    total pengguna sebenarnya.
+  - Label periode tampil benar untuk preset maupun rentang manual
+    (10/11/2026 - 12/11/2026).
+  - Tampilan diperiksa di 1440, 1024, 768, dan 390 px tanpa overflow.
+
+========================================================================

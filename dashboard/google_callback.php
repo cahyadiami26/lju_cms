@@ -11,6 +11,7 @@ require_once __DIR__ . '/config/session.php';
 require_once __DIR__ . '/config/database.php';
 require_once __DIR__ . '/config/apps.php';
 require_once __DIR__ . '/config/google.php';
+require_once __DIR__ . '/config/activity_log.php';
 
 function googleLoginFail(string $message): void
 {
@@ -115,20 +116,16 @@ if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 
-// 9. Catat log aktivitas
-try {
-    $logStmt = $pdo->prepare("
-        INSERT INTO login_logs (user_id, activity, ip_address, user_agent, created_at)
-        VALUES (:user_id, 'login_google_success', :ip, :ua, NOW())
-    ");
-    $logStmt->execute([
-        'user_id' => $user['id'],
-        'ip'      => $_SERVER['REMOTE_ADDR'] ?? '',
-        'ua'      => $_SERVER['HTTP_USER_AGENT'] ?? ''
-    ]);
-} catch (Throwable $e) {
-    error_log('Google Login Log Error: ' . $e->getMessage());
-}
+// 9. Catat log aktivitas login Google
+logUserActivity((int) $user['id'], LOG_LOGIN_GOOGLE_SUCCESS, [
+    'app_key'     => 'dashboard',
+    'app_name'    => 'Login Portal',
+    'description' => 'Login berhasil via Google (' . $googleEmail . ')',
+    'target_url'  => '/dashboard/',
+]);
+
+// Reset throttle aktivitas untuk sesi baru
+unset($_SESSION['activity_log_throttle']);
 
 // 10. Redirect sesuai target (sama dengan logika index.php)
 $target_system        = trim($_SESSION['google_target_system'] ?? '');
@@ -140,6 +137,12 @@ $allowed_urls = function_exists('getAllowedRedirectUrls')
     : array_values(array_column(getAppsConfig(), 'url'));
 
 if (!empty($target_system) && in_array($target_system, $allowed_urls, true)) {
+    // Catat aktivitas aplikasi tujuan (jika user langsung masuk ke aplikasi)
+    $targetApp = getAppByUrl($target_system);
+    if ($targetApp !== null) {
+        logAppOpen((string) $targetApp['key'], $targetApp, (int) $user['id'], 'login Google langsung ke aplikasi');
+    }
+
     if (!empty($redirect_after_login) && $target_system === APP_URL_PM) {
         header('Location: ' . APP_URL_PM . $redirect_after_login);
         exit;

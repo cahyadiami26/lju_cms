@@ -14,6 +14,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/config/session.php';
 require_once __DIR__ . '/config/database.php';
+require_once __DIR__ . '/config/activity_log.php';
 
 /* =========================================================
  * KONFIGURASI
@@ -507,6 +508,22 @@ try {
             UPLOAD_BASE . '/signatures'
         );
     }
+
+    /*
+     * Catat aktivitas update profil ke login_logs.
+     */
+    $changed = [];
+    if ($password !== '')          { $changed[] = 'password'; }
+    if ($newAvatar !== null)       { $changed[] = 'avatar'; }
+    if ($newPhoto !== null)        { $changed[] = 'foto'; }
+    if ($newSignature !== null)    { $changed[] = 'tanda tangan'; }
+
+    logUserActivity((int) $userId, LOG_UPDATE_PROFILE, [
+        'app_key'     => 'dashboard',
+        'app_name'    => 'Profil Pengguna',
+        'description' => 'Update profil' . (!empty($changed) ? ' (' . implode(', ', $changed) . ')' : ''),
+        'target_url'  => '/dashboard/',
+    ]);
 
     redirectBack(
         'success',
